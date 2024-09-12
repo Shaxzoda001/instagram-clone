@@ -1,7 +1,7 @@
 import datetime
 from fastapi import APIRouter, HTTPException, status, Depends
 from models import User
-from schemas import UserRegister, UserLogin, UserPasswordReset
+from schemas.auth import RegisterSchema, LoginSchema, PasswordResetSchema
 from database import ENGINE, Session
 from werkzeug.security import generate_password_hash, check_password_hash
 from fastapi.encoders import jsonable_encoder
@@ -23,7 +23,7 @@ async def get_auth(Authorize: AuthJWT = Depends()):
     return HTTPException(status_code=status.HTTP_200_OK, detail="auth page")
 
 @auth_router.post('/login', status_code=200)
-async def login_user(user: UserLogin, Authorize: AuthJWT = Depends()):
+async def login_user(user: LoginSchema, Authorize: AuthJWT = Depends()):
     # check_user = session.query(User).filter(User.username == user.username).first()
     check_user = session.query(User).filter(User.username == user.username).first()
     if check_user:
@@ -46,7 +46,7 @@ async def login_user(user: UserLogin, Authorize: AuthJWT = Depends()):
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
 @auth_router.post('/register')
-async def register_user(user: UserRegister):
+async def register_user(user: RegisterSchema):
     check_user = session.query(User).filter(User.username == user.username).first()
     if check_user is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User already exists")
@@ -95,3 +95,36 @@ async def refresh_token(Authorize: AuthJWT = Depends()):
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+
+@auth_router.post("/reset-password")
+async def reset_password(user: PasswordResetSchema, Authorize: AuthJWT = Depends()):
+    try:
+        Authorize.jwt_refresh_token_required()
+        if user.password ==user.correct_password:
+            current_user = session.query(User).filter(User.username == Authorize.get_jwt_subject()).first()
+            if current_user:
+                current_user.password = generate_password_hash(user.password)
+                session.add(current_user)
+                session.commit()
+                data = {
+                    "success": True,
+                    "code": 200,
+                    "message": "Password changes successfully done"
+                }
+                return jsonable_encoder(data)
+            return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect password")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect credentials or invalid token")
+
+
+
+
+
+
+
+
+
+
+
+
