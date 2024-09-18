@@ -1,6 +1,22 @@
+# from sqlalchemy import create_engine
+# from sqlalchemy.orm import sessionmaker, declarative_base
+#
+# ENGINE = create_engine('postgresql://postgres:2004@localhost/instagram_clone', echo=True)
+# Base = declarative_base()
+# Session = sessionmaker()
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+# from models import Base
 
-ENGINE = create_engine('postgresql://postgres:2004@localhost/instagram_clone', echo=True)
+engine = create_engine('postgresql://postgres:2004@localhost/instagram_clone', echo=True)
 Base = declarative_base()
-Session = sessionmaker()
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+

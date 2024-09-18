@@ -2,14 +2,11 @@ import datetime
 from fastapi import APIRouter, HTTPException, status, Depends
 from models import User
 from schemas.auth import RegisterSchema, LoginSchema, PasswordResetSchema
-from database import ENGINE, Session
+from fastapi_jwt_auth import AuthJWT
+from sqlalchemy.orm import Session
+from database import get_db
 from werkzeug.security import generate_password_hash, check_password_hash
 from fastapi.encoders import jsonable_encoder
-from fastapi_jwt_auth import AuthJWT
-from sqlalchemy import or_
-
-
-session = Session(bind=ENGINE)
 
 auth_router = APIRouter(prefix='/auth', tags=['auth'])
 
@@ -17,38 +14,31 @@ auth_router = APIRouter(prefix='/auth', tags=['auth'])
 async def get_auth(Authorize: AuthJWT = Depends()):
     try:
         Authorize.jwt_required()
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token", headers={"WWW-Authenticate": "Bearer"})
 
-    return HTTPException(status_code=status.HTTP_200_OK, detail="auth page")
+    return {"message": "auth page"}
 
 @auth_router.post('/login', status_code=200)
-async def login_user(user: LoginSchema, Authorize: AuthJWT = Depends()):
-    # check_user = session.query(User).filter(User.username == user.username).first()
-    check_user = session.query(User).filter(User.username == user.username).first()
-    if check_user:
-        if check_password_hash(check_user.password, user.password):
-            access_lifetime = datetime.timedelta(minutes=10)
-            refresh_lifetime = datetime.timedelta(days=3)
-            access_token = Authorize.create_access_token(subject=check_user.username, expires_time=access_lifetime)
-            refresh_token = Authorize.create_refresh_token(subject=check_user.username, expires_time=refresh_lifetime)
-            token = {
-                'access_token': access_token,
-                'refresh_token': refresh_token
-            }
-            response = {
-                "code": status.HTTP_200_OK,
-                "success": True,
-                "token": token
-            }
-            return jsonable_encoder(response)
-        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect password")
-    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+async def login_user(user: LoginSchema, Authorize: AuthJWT = Depends(), db: Session = Depends(get_db)):
+    check_user = db.query(User).filter(User.username == user.username).first()
+    if check_user and check_password_hash(check_user.password, user.password):
+        access_lifetime = datetime.timedelta(minutes=10)
+        refresh_lifetime = datetime.timedelta(days=3)
+        access_token = Authorize.create_access_token(subject=check_user.username, expires_time=access_lifetime)
+        refresh_token = Authorize.create_refresh_token(subject=check_user.username, expires_time=refresh_lifetime)
+        return jsonable_encoder({
+            'access_token': access_token,
+            'refresh_token': refresh_token
+        })
+    if not check_user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect password")
 
 @auth_router.post('/register')
-async def register_user(user: RegisterSchema):
-    check_user = session.query(User).filter(User.username == user.username).first()
-    if check_user is not None:
+async def register_user(user: RegisterSchema, db: Session = Depends(get_db)):
+    check_user = db.query(User).filter(User.username == user.username).first()
+    if check_user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User already exists")
 
     new_user = User(
@@ -56,75 +46,49 @@ async def register_user(user: RegisterSchema):
         email=user.email,
         password=generate_password_hash(user.password)
     )
-    session.add(new_user)
-    session.commit()
-    data = {
-        "status": 201,
-        "success": True,
-        "message": "User registered"
-    }
-    return jsonable_encoder(data)
-
+    db.add(new_user)
+    db.commit()
+    return jsonable_encoder({"status": 201, "success": True, "message": "User registered"})
 
 @auth_router.get('/users')
-async def get_users():
-    users = session.query(User).all()
+async def get_users(db: Session = Depends(get_db)):
+    users = db.query(User).all()
     return jsonable_encoder(users)
 
 @auth_router.get('/login/refresh')
-async def refresh_token(Authorize: AuthJWT = Depends()):
+async def refresh_token(Authorize: AuthJWT = Depends(), db: Session = Depends(get_db)):
     try:
         access_lifetime = datetime.timedelta(minutes=1)
         refresh_lifetime = datetime.timedelta(days=3)
         Authorize.jwt_refresh_token_required()
         current_user = Authorize.get_jwt_subject()
 
-        check_user = session.query(User).filter(User.username == current_user).first()
-        if check_user is None:
+        check_user = db.query(User).filter(User.username == current_user).first()
+        if not check_user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
         new_access_token = Authorize.create_access_token(subject=check_user.username, expires_time=access_lifetime)
-
-        response = {
+        return jsonable_encoder({
             "code": 200,
             "success": True,
-            "message": "New refresh token created",
+            "message": "New access token created",
             "data": new_access_token
-        }
-        return jsonable_encoder(response)
-
-    except Exception as e:
+        })
+    except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
 @auth_router.post("/reset-password")
-async def reset_password(user: PasswordResetSchema, Authorize: AuthJWT = Depends()):
+async def reset_password(user: PasswordResetSchema, Authorize: AuthJWT = Depends(), db: Session = Depends(get_db)):
     try:
         Authorize.jwt_refresh_token_required()
-        if user.password ==user.correct_password:
-            current_user = session.query(User).filter(User.username == Authorize.get_jwt_subject()).first()
+        if user.password == user.correct_password:
+            current_user = db.query(User).filter(User.username == Authorize.get_jwt_subject()).first()
             if current_user:
                 current_user.password = generate_password_hash(user.password)
-                session.add(current_user)
-                session.commit()
-                data = {
-                    "success": True,
-                    "code": 200,
-                    "message": "Password changes successfully done"
-                }
-                return jsonable_encoder(data)
-            return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect password")
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect credentials or invalid token")
-
-
-
-
-
-
-
-
-
-
-
-
+                db.add(current_user)
+                db.commit()
+                return jsonable_encoder({"success": True, "code": 200, "message": "Password successfully updated"})
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect password")
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token or credentials")

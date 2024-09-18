@@ -1,7 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from uuid import UUID
 
-
-class LikeCreateSchema(BaseModel):
-    user_id: Optional[int]
-    post_id: Optional[int]
+class LikeSchema(BaseModel):
+    post_id: UUID
